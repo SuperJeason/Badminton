@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, time
 
 class Badminton:
     def __init__(self):
+        self.token = ""
         self.proxies = {"http": "", "https": ""}
         self.headers = {
             "width": "414",
@@ -11,10 +12,10 @@ class Badminton:
             "height": "736",
             "Content-Type": "application/json",
             "xweb_xhr": "1",
-            "X-UserToken": "579d348a-f156-4fac-8102-435f47833963",
+            "X-UserToken": self.token,
             "device-name": "microsoft",
             "os": "windows",
-            "token": "579d348a-f156-4fac-8102-435f47833963",
+            "token": self.token,
             "Sec-Fetch-Site": "cross-site",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Dest": "empty",
@@ -122,7 +123,7 @@ def main():
     badminton = Badminton()
     # 6.改时间
     selected_cells = [
-        (4,2),
+        (4, 2),
     ]
     badminton.booking(selected_cells)
 
