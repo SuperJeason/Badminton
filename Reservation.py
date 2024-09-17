@@ -1,7 +1,7 @@
 from datetime import datetime
 import requests
 from typing import List
-
+import concurrent.futures
 
 # 统一全局返回结果
 class Result:
@@ -84,6 +84,7 @@ class Reservation:
         return Result.success(response.json())
 
     # 预约场地
+
     def reserveField(self) -> List[Result]:
         fieldResult = Reservation.getLibraryInfo(
             self.headers,
@@ -92,21 +93,27 @@ class Reservation:
             self.reservePlace,
             self.fieldId,
         ).finalData()
+
         if fieldResult["code"] != 0:
             return Result.error(fieldResult["message"])
+
         sessionList = fieldResult["data"]
         requestsLists = []
+
+        # 根据 reserveList 构造 requestsLists
         for row, col in self.reserveList:
             reservePlaceId = col + 1
             requestsLists.append({"sessionsId": sessionList[col][row]["id"]})
+
         reserveUrl = "https://zhcg.swjtu.edu.cn/onesports-gateway/business-service/orders/weChatSessionsReserve"
         orderUseDate = int(
             datetime.strptime(self.reserveDate, "%Y-%m-%d").timestamp() * 1000
         )
+
+        # 用于保存返回的结果
         reserveResults = []
-        for i in range(len(requestsLists)):
-            requestsList = []
-            requestsList.append(requestsLists[i])
+        # 定义请求发送函数
+        def send_request(requestsList, reservePlaceId):
             reserveData = {
                 "犀浦": {
                     "number": reservePlaceId,
@@ -129,21 +136,34 @@ class Reservation:
                     "sportTypeId": "2",
                 },
             }
+
             response = requests.post(
                 url=reserveUrl,
                 json=reserveData[self.reservePlace],
                 headers=self.headers,
                 proxies=self.proxies,
             ).json()
+
             if response["code"] != 200:
-                reserveResults.append(Result.error(response["msg"]))
+                return Result.error(response["msg"])
             else:
-                reserveResults.append(Result.success({"orderId": response["orderId"]}))
+                return Result.success({"orderId": response["orderId"]})
+
+        # 使用多线程并行发送请求
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = []
+            for i in range(len(requestsLists)):
+                requestsList = [requestsLists[i]]
+                reservePlaceId = self.reserveList[i][1] + 1
+                futures.append(executor.submit(send_request, requestsList, reservePlaceId))
+
+            for future in concurrent.futures.as_completed(futures):
+                reserveResults.append(future.result())
         return reserveResults
 
 
 def main():
-    personToken = "token"
+    personToken = "579d348a-f156-4fac-8102-435f47833963"
     reservePlace = "犀浦"
     reserveDate = "2024-09-18"
     reserveList = [
@@ -160,4 +180,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    while True:
+        main()
