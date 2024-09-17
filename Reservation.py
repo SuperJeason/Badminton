@@ -4,21 +4,22 @@ import requests
 from typing import List
 import concurrent.futures
 import json
+from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 
 # 日志配置
 logging.basicConfig(
-    level=logging.INFO,  # 日志级别为INFO
-    format="%(asctime)s - %(levelname)s - %(message)s",  # 日志格式
-    filename="reservation.log",  # 日志文件名
-    filemode="a",  # 追加模式
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    filename="reservation.log",
+    filemode="a",
 )
 
 
 class Result:
     def __init__(self, code=0, message="操作成功", data=None):
-        self.code = code  # 业务状态码 0-成功 1-失败
-        self.message = message  # 提示信息
-        self.data = data  # 响应数据
+        self.code = code
+        self.message = message
+        self.data = data
 
     @staticmethod
     def success(data=None):
@@ -38,45 +39,45 @@ class SportsFacilityReservation:
 
     def __init__(self, config) -> None:
         self.proxies = {"http": "", "https": ""}
-        self.headers = {
-            "width": "414",
-            "os-version": "Windows 11 x64",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090b19)XWEB/11253",
-            "height": "736",
-            "xweb_xhr": "1",
-            "X-UserToken": config["personToken"],
-            "device-name": "microsoft",
-            "os": "windows",
-            "Sec-Fetch-Site": "cross-site",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Dest": "empty",
-            "Referer": "https://servicewechat.com/wx34c9f462afa158b3/23/page-frame.html",
-            "Accept-Language": "zh-CN,zh;q=0.9",
-            "token": config["personToken"],
-        }
+        self.headers = config["headers"]
         self.reserveDate = datetime.strptime(
             config["reserveDate"], "%Y-%m-%d"
         ).strftime("%Y-%m-%d")
         self.reservePlace = config["reservePlace"]
         self.reserveList = config["reserveList"]
+        self.apiUrls = config["apiUrls"]
 
     @staticmethod
-    def getLibraryInfo(headers, proxies, reserveDate, reservePlace) -> Result:
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_fixed(2),
+        retry=retry_if_exception_type(requests.RequestException),
+    )
+    def _get_field_id(headers, proxies, url):
+        place_url = url
+        response = requests.get(url=place_url, headers=headers, proxies=proxies)
+        return {
+            "九里": response.json()["fieldList"][0]["id"],
+            "犀浦": response.json()["fieldList"][1]["id"],
+        }
+
+    @staticmethod
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_fixed(0.2),
+        retry=retry_if_exception_type(requests.RequestException),
+    )
+    def getLibraryInfo(headers, proxies, reserveDate, reservePlace, apiUrls) -> Result:
         if reservePlace in SportsFacilityReservation.session_cache:
             logging.info(f"使用缓存的场地信息: {reservePlace}")
             return Result.success(SportsFacilityReservation.session_cache[reservePlace])
 
         try:
             if reservePlace not in SportsFacilityReservation.field_cache:
-                place_url = "https://zhcg.swjtu.edu.cn/onesports-gateway/wechat-c/api/wechat/memberBookController/fields?sportTypeId=2"
-                response = requests.get(url=place_url, headers=headers, proxies=proxies)
-                fieldId = {
-                    "九里": response.json()["fieldList"][0]["id"],
-                    "犀浦": response.json()["fieldList"][1]["id"],
-                }
+                fieldId = SportsFacilityReservation._get_field_id(headers, proxies, apiUrls["place_url"])
                 SportsFacilityReservation.field_cache = fieldId
                 logging.info(f"场地缓存已更新: {fieldId}")
-            weChatSessionsListUrl = "https://zhcg.swjtu.edu.cn/onesports-gateway/wechat-c/api/wechat/memberBookController/weChatSessionsList"
+            weChatSessionsListUrl = apiUrls["session_list_url"]
             reserveData = {
                 "fieldId": SportsFacilityReservation.field_cache[reservePlace],
                 "isIndoor": "",
@@ -103,9 +104,18 @@ class SportsFacilityReservation:
             logging.error(f"请求失败: {str(e)}")
             return Result.error(f"请求失败: {str(e)}")
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_fixed(0.02),
+        retry=retry_if_exception_type(requests.RequestException),
+    )
     def reserveField(self) -> List[Result]:
-        fieldResult = SportsFacilityReservation.getLibraryInfo(
-            self.headers, self.proxies, self.reserveDate, self.reservePlace
+        fieldResult = self.getLibraryInfo(
+            self.headers,
+            self.proxies,
+            self.reserveDate,
+            self.reservePlace,
+            self.apiUrls,
         ).finalData()
 
         if fieldResult["code"] != 0:
@@ -116,7 +126,7 @@ class SportsFacilityReservation:
         requestsLists = [
             {"sessionsId": sessionList[col][row]["id"]} for row, col in self.reserveList
         ]
-        reserveUrl = "https://zhcg.swjtu.edu.cn/onesports-gateway/business-service/orders/weChatSessionsReserve"
+        reserveUrl = self.apiUrls["reserve_url"]
         orderUseDate = int(
             datetime.strptime(self.reserveDate, "%Y-%m-%d").timestamp() * 1000
         )
@@ -182,5 +192,4 @@ def main():
 
 
 if __name__ == "__main__":
-    while True:
-        main()
+    main()
