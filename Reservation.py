@@ -163,7 +163,7 @@ class Reservation:
 
 
 def main():
-    personToken = "579d348a-f156-4fac-8102-435f47833963"
+    personToken = "token"
     reservePlace = "犀浦"
     reserveDate = "2024-09-18"
     reserveList = [
