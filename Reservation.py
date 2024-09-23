@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 from typing import List
 import concurrent.futures
@@ -10,8 +10,6 @@ from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_t
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    filename="reservation.log",
-    filemode="a",
 )
 
 
@@ -23,11 +21,11 @@ class Result:
 
     @staticmethod
     def success(data=None):
-        return Result(0, "操作成功", data)
+        return Result(0, "操作成功", data).finalData()
 
     @staticmethod
     def error(message):
-        return Result(1, message, None)
+        return Result(1, message, None).finalData()
 
     def finalData(self):
         return {"code": self.code, "message": self.message, "data": self.data}
@@ -74,7 +72,9 @@ class SportsFacilityReservation:
 
         try:
             if reservePlace not in SportsFacilityReservation.field_cache:
-                fieldId = SportsFacilityReservation._get_field_id(headers, proxies, apiUrls["place_url"])
+                fieldId = SportsFacilityReservation._get_field_id(
+                    headers, proxies, apiUrls["place_url"]
+                )
                 SportsFacilityReservation.field_cache = fieldId
                 logging.info(f"场地缓存已更新: {fieldId}")
             weChatSessionsListUrl = apiUrls["session_list_url"]
@@ -116,7 +116,7 @@ class SportsFacilityReservation:
             self.reserveDate,
             self.reservePlace,
             self.apiUrls,
-        ).finalData()
+        )
 
         if fieldResult["code"] != 0:
             logging.error(f"获取场地信息失败: {fieldResult['message']}")
@@ -181,14 +181,28 @@ def load_config(filename="config.json"):
         return json.load(f)
 
 
-def main():
-    config = load_config()
-    reservation = SportsFacilityReservation(config)
+def process_user(user, apiUrls):
+    user["reserveDate"] = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+    logging.info(
+        f"当前用户：{user['headers']['X-UserToken']}，预约日期：{user['reserveDate']}"
+    )
+    user["apiUrls"] = apiUrls
+    reservation = SportsFacilityReservation(user)
     reserveResults = reservation.reserveField()
     for reserveResult in reserveResults:
-        message = reserveResult.finalData()["message"]
+        message = reserveResult["message"]
         logging.info(f"预约结果: {message}")
-        print(message)
+
+
+def main():
+    config = load_config()
+    apiUrls = config["apiUrls"]
+    users = config["users"]
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = [executor.submit(process_user, user, apiUrls) for user in users]
+        for future in concurrent.futures.as_completed(futures):
+            future.result()
 
 
 if __name__ == "__main__":
